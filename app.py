@@ -50,16 +50,13 @@ def scrape_roze_news(keyword):
     try:
         search_url = SEARCH_URL.format(keyword=keyword)
         driver.get(search_url)
-        time.sleep(3)
+        time.sleep(4)
 
+        # Get first article URL
         article_url = None
         selectors = [
-            "article h2 a",
-            "article h3 a",
-            ".post-title a",
-            "h2.entry-title a",
-            "h3.entry-title a",
-            ".entry-title a",
+            "article h2 a", "article h3 a", ".post-title a",
+            "h2.entry-title a", "h3.entry-title a", ".entry-title a",
             "main article a",
         ]
         for selector in selectors:
@@ -92,25 +89,48 @@ def scrape_roze_news(keyword):
             return result
 
         result["url"] = article_url
-        driver.get(article_url)
-        time.sleep(3)
 
-        content_text = ""
-        for sel in [".entry-content", ".post-content", "article .content", ".article-body"]:
+        # Extract preview/excerpt text from search results page (avoids bot block)
+        summary_text = ""
+        excerpt_selectors = [
+            "article .entry-summary",
+            "article .entry-content",
+            "article p",
+            ".post-excerpt",
+            ".excerpt",
+        ]
+        for sel in excerpt_selectors:
             try:
                 elements = driver.find_elements(By.CSS_SELECTOR, sel)
-                if elements:
-                    content_text = " ".join([el.text.strip() for el in elements if el.text.strip()])
-                    if len(content_text) > 100:
-                        break
+                texts = [el.text.strip() for el in elements if el.text.strip() and len(el.text.strip()) > 30]
+                if texts:
+                    summary_text = " ".join(texts[:3])
+                    break
             except Exception:
                 continue
 
-        if not content_text or len(content_text) < 100:
-            paragraphs = driver.find_elements(By.TAG_NAME, "p")
-            content_text = " ".join([p.text.strip() for p in paragraphs if p.text.strip()])
+        # If still empty, try visiting article with extra headers
+        if not summary_text or len(summary_text) < 50:
+            try:
+                driver.execute_cdp_cmd("Network.setExtraHTTPHeaders", {
+                    "headers": {
+                        "Referer": "https://www.google.com/",
+                        "Accept-Language": "en-US,en;q=0.9",
+                    }
+                })
+                driver.get(article_url)
+                time.sleep(4)
+                paragraphs = driver.find_elements(By.TAG_NAME, "p")
+                texts = [p.text.strip() for p in paragraphs
+                         if p.text.strip() and len(p.text.strip()) > 40
+                         and "cookie" not in p.text.lower()
+                         and "problem" not in p.text.lower()]
+                if texts:
+                    summary_text = " ".join(texts[:5])
+            except Exception:
+                pass
 
-        result["summary"] = summarize(content_text) if content_text else "Could not extract content."
+        result["summary"] = summarize(summary_text) if summary_text else "Could not extract article content."
 
     except Exception as e:
         result["summary"] = f"Error: {str(e)}"
